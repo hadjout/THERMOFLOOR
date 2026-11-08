@@ -1,41 +1,61 @@
+
 name: THERMOFLOOR APK Build
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Download project
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Install Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Install Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Setup Gradle
+      - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract project
+      - name: Extract ZIP files
         run: |
-          unzip -o THERMOFLOOR-cloud-build-v0.2.zip
-          unzip -o THERMOFLOOR-android-source-v0.2.zip
+          mkdir -p extracted
+          for file in ./*.zip; do
+            if [ -f "$file" ]; then
+              unzip -o "$file" -d extracted
+            fi
+          done
+
+      - name: Find Android project
+        run: |
+          PROJECT_DIR=$(find extracted . -name settings.gradle -not -path './.git/*' -printf '%h\n' | head -n 1)
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "Android project not found"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Build APK
-        working-directory: THERMOFLOOR
-        run: gradle assembleDebug
+        run: gradle -p "$PROJECT_DIR" assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: THERMOFLOOR-debug-apk
-          path: THERMOFLOOR/app/build/outputs/apk/debug/app-debug.apk
+          name: THERMOFLOOR-APK
+          path: '**/build/outputs/apk/debug/*.apk'
+          if-no-files-found: error
