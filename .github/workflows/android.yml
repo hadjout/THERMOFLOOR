@@ -18,42 +18,61 @@ jobs:
       - name: Download project
         uses: actions/checkout@v4
 
-      - name: Install Java
+      - name: Install Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "Android SDK location: $ANDROID_HOME"
+          ls -la "$ANDROID_HOME"
+          ls "$ANDROID_HOME/cmdline-tools"
+
+      - name: Accept Android licenses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 
       - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract ZIP files
+      - name: Extract project ZIP files
         run: |
           mkdir -p extracted
           for file in ./*.zip; do
             if [ -f "$file" ]; then
+              echo "Extracting $file"
               unzip -o "$file" -d extracted
             fi
           done
 
       - name: Find Android project
         run: |
-          PROJECT_DIR=$(find extracted . -name settings.gradle -not -path './.git/*' -printf '%h\n' | head -n 1)
+          PROJECT_DIR=$(find extracted . \
+            -name settings.gradle \
+            -not -path './.git/*' \
+            -not -path './extracted/extracted/*' \
+            -printf '%h\n' | head -n 1)
+
           if [ -z "$PROJECT_DIR" ]; then
-            echo "Android project not found"
+            echo "ERROR: Android project not found"
+            find extracted -maxdepth 4 -type f
             exit 1
           fi
+
+          echo "Android project: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      - name: Build APK
-        run: gradle -p "$PROJECT_DIR" assembleDebug
+      - name: Build THERMOFLOOR APK
+        run: |
+          gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload THERMOFLOOR APK
         uses: actions/upload-artifact@v4
         with:
           name: THERMOFLOOR-APK
