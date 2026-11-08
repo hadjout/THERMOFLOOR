@@ -28,7 +28,7 @@ jobs:
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "Android SDK location: $ANDROID_HOME"
+          echo "Android SDK: $ANDROID_HOME"
           ls -la "$ANDROID_HOME"
           ls "$ANDROID_HOME/cmdline-tools"
 
@@ -41,35 +41,51 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Extract project ZIP files
+      - name: Extract ZIP archives
+        shell: bash
         run: |
-          mkdir -p extracted
-          for file in ./*.zip; do
-            if [ -f "$file" ]; then
-              echo "Extracting $file"
-              unzip -o "$file" -d extracted
+          mkdir -p extracted/outer
+          mkdir -p extracted/project
+
+          echo "Extracting repository ZIP files..."
+
+          for archive in ./*.zip; do
+            if [ -f "$archive" ]; then
+              echo "Extracting: $archive"
+              unzip -o "$archive" -d extracted/outer
             fi
           done
 
+          echo "Extracting Android source ZIP files..."
+
+          while IFS= read -r -d '' archive; do
+            echo "Extracting nested archive: $archive"
+            unzip -o "$archive" -d extracted/project
+          done < <(find extracted/outer -type f -name "*.zip" -print0)
+
+          echo "Searching Android project files..."
+          find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \)
+
       - name: Find Android project
+        shell: bash
         run: |
-          PROJECT_DIR=$(find extracted . \
-            -name settings.gradle \
-            -not -path './.git/*' \
-            -not -path './extracted/extracted/*' \
+          PROJECT_DIR=$(find extracted \
+            -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
             -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: Android project not found"
-            find extracted -maxdepth 4 -type f
+            find extracted -maxdepth 7 -type f
             exit 1
           fi
 
-          echo "Android project: $PROJECT_DIR"
+          echo "Project found: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Build THERMOFLOOR APK
         run: |
+          echo "Building THERMOFLOOR..."
           gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
 
       - name: Upload THERMOFLOOR APK
