@@ -15,60 +15,95 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout project
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Configure Android SDK
-        uses: android-actions/setup-android@v3
+        shell: bash
+        run: |
+          SDK=/usr/local/lib/android/sdk
+
+          if [ ! -d "$SDK" ]; then
+            echo "Android SDK not found: $SDK"
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/platform-tools:$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+          echo "Android SDK found:"
+          ls -la "$SDK"
+
+      - name: Install Android packages
+        shell: bash
+        run: |
+          SDK="$ANDROID_HOME"
+          SDKMANAGER=$(find "$SDK/cmdline-tools" -name sdkmanager -type f | head -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract project ZIP
+      - name: Extract project ZIP files
         shell: bash
         run: |
           mkdir -p extracted/outer extracted/project
 
           for archive in ./*.zip; do
             [ -f "$archive" ] || continue
+            echo "Extracting $archive"
             unzip -o "$archive" -d extracted/outer
           done
 
           while IFS= read -r -d '' archive; do
+            echo "Extracting nested ZIP: $archive"
             unzip -o "$archive" -d extracted/project
           done < <(find extracted/outer -type f -name "*.zip" -print0)
 
       - name: Find Android project
         shell: bash
         run: |
-          PROJECT_DIR=$(find extracted -type f \
+          PROJECT_DIR=$(find extracted \
+            -type f \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
             -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "Android project not found"
+            echo "ERROR: Android project not found"
             find extracted -maxdepth 7 -type f
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project found: $PROJECT_DIR"
+          echo "Android project: $PROJECT_DIR"
 
-      - name: Fix Java and Kotlin targets
+      - name: Fix Java and Kotlin compatibility
         shell: bash
         run: |
           FILE="$PROJECT_DIR/app/build.gradle"
 
           if [ ! -f "$FILE" ]; then
-            echo "app/build.gradle not found"
+            echo "ERROR: app/build.gradle not found"
             exit 1
           fi
 
@@ -77,6 +112,7 @@ jobs:
           import re
 
           path = sys.argv[1]
+
           with open(path, encoding="utf-8") as f:
               content = f.read()
 
@@ -95,23 +131,23 @@ jobs:
 
           if "compileOptions" not in content:
               content, count = re.subn(
-                  r'android\s*\{',
+                  r'android\\s*\\{',
                   lambda m: m.group(0) + java_block,
                   content,
                   count=1
               )
               if count == 0:
-                  raise SystemExit("android block not found")
+                  raise SystemExit("Android block not found")
 
           if "kotlinOptions" not in content:
               content, count = re.subn(
-                  r'android\s*\{',
+                  r'android\\s*\\{',
                   lambda m: m.group(0) + kotlin_block,
                   content,
                   count=1
               )
               if count == 0:
-                  raise SystemExit("android block not found for Kotlin")
+                  raise SystemExit("Android block not found for Kotlin")
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(content)
@@ -119,12 +155,11 @@ jobs:
           print("Java 17 and Kotlin 17 configured")
           PY
 
-          cat "$FILE"
-
       - name: Build THERMOFLOOR APK
-        run: gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
+        run: |
+          gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload THERMOFLOOR APK
         uses: actions/upload-artifact@v4
         with:
           name: THERMOFLOOR-APK
