@@ -30,16 +30,13 @@ jobs:
           SDK=/usr/local/lib/android/sdk
 
           if [ ! -d "$SDK" ]; then
-            echo "Android SDK not found: $SDK"
+            echo "Android SDK not found"
             exit 1
           fi
 
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
           echo "$SDK/platform-tools:$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
-
-          echo "Android SDK found:"
-          ls -la "$SDK"
 
       - name: Install Android packages
         shell: bash
@@ -48,7 +45,7 @@ jobs:
           SDKMANAGER=$(find "$SDK/cmdline-tools" -name sdkmanager -type f | head -n 1)
 
           if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found"
+            echo "sdkmanager not found"
             exit 1
           fi
 
@@ -64,38 +61,35 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Extract project ZIP files
+      - name: Extract ZIP files
         shell: bash
         run: |
           mkdir -p extracted/outer extracted/project
 
           for archive in ./*.zip; do
             [ -f "$archive" ] || continue
-            echo "Extracting $archive"
             unzip -o "$archive" -d extracted/outer
           done
 
           while IFS= read -r -d '' archive; do
-            echo "Extracting nested ZIP: $archive"
             unzip -o "$archive" -d extracted/project
           done < <(find extracted/outer -type f -name "*.zip" -print0)
 
       - name: Find Android project
         shell: bash
         run: |
-          PROJECT_DIR=$(find extracted \
-            -type f \
+          PROJECT_DIR=$(find extracted -type f \
             \( -name settings.gradle -o -name settings.gradle.kts \) \
             -printf '%h\n' | head -n 1)
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android project not found"
+            echo "Android project not found"
             find extracted -maxdepth 7 -type f
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Android project: $PROJECT_DIR"
+          echo "Project found: $PROJECT_DIR"
 
       - name: Fix Java and Kotlin compatibility
         shell: bash
@@ -103,9 +97,16 @@ jobs:
           FILE="$PROJECT_DIR/app/build.gradle"
 
           if [ ! -f "$FILE" ]; then
-            echo "ERROR: app/build.gradle not found"
+            FILE="$PROJECT_DIR/app/build.gradle.kts"
+          fi
+
+          if [ ! -f "$FILE" ]; then
+            echo "App Gradle file not found"
+            find "$PROJECT_DIR" -maxdepth 3 -type f
             exit 1
           fi
+
+          echo "Editing: $FILE"
 
           python3 - "$FILE" <<'PY'
           import sys
@@ -116,43 +117,42 @@ jobs:
           with open(path, encoding="utf-8") as f:
               content = f.read()
 
-          java_block = """
+          android_match = re.search(r'\bandroid\s*\{', content)
+
+          if not android_match:
+              print("Android block not found. Actual file:")
+              print(content)
+              raise SystemExit(1)
+
+          if "compileOptions" not in content:
+              java_block = """
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
-          """
+              """
+              content = content[:android_match.end()] + java_block + content[android_match.end():]
 
-          kotlin_block = """
+          if "kotlinOptions" not in content:
+              kotlin_block = """
               kotlinOptions {
                   jvmTarget = '17'
               }
-          """
+              """
+              android_match = re.search(r'\bandroid\s*\{', content)
+              content = content[:android_match.end()] + kotlin_block + content[android_match.end():]
 
-          if "compileOptions" not in content:
-              content, count = re.subn(
-                  r'android\\s*\\{',
-                  lambda m: m.group(0) + java_block,
-                  content,
-                  count=1
-              )
-              if count == 0:
-                  raise SystemExit("Android block not found")
-
-          if "kotlinOptions" not in content:
-              content, count = re.subn(
-                  r'android\\s*\\{',
-                  lambda m: m.group(0) + kotlin_block,
-                  content,
-                  count=1
-              )
-              if count == 0:
-                  raise SystemExit("Android block not found for Kotlin")
+          content = re.sub(
+              r'jvmTarget\s*=\s*["\'][^"\']+["\']',
+              "jvmTarget = '17'",
+              content
+          )
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(content)
 
-          print("Java 17 and Kotlin 17 configured")
+          print("Java and Kotlin targets configured to 17")
+          print(content)
           PY
 
       - name: Build THERMOFLOOR APK
